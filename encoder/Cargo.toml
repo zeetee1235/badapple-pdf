@@ -1,0 +1,9 @@
+[package]
+name = "badapple_encoder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+lopdf = "0.32"
+flate2 = "1.0"

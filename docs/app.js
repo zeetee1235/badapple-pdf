@@ -7,6 +7,24 @@ const audioEl = document.getElementById("audio");
 const cv = document.getElementById("cv");
 const ctx = cv.getContext("2d");
 
+const PDFJS_CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js";
+const PDFJS_WORKER_CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
+
+async function ensurePdfJs() {
+  if (window.pdfjsLib) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = PDFJS_CDN;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Failed to load PDF.js from CDN"));
+    document.head.appendChild(s);
+  });
+  if (!window.pdfjsLib) throw new Error("pdfjsLib is not defined");
+  if (pdfjsLib.GlobalWorkerOptions) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN;
+  }
+}
+
 let state = {
   loaded: false,
   fps: 30,
@@ -21,6 +39,8 @@ let state = {
   frameIndex: 0,
   startClock: 0,
   raf: 0,
+  img: null,
+  audioUrl: null,
 };
 
 // bit helper (MSB-first)
@@ -35,17 +55,21 @@ function xorInPlace(dst, src) {
 }
 
 function parseHeader(u8) {
+  if (u8.byteLength < 10) throw new Error("BA stream too small for header");
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const w = dv.getUint16(0, true);
   const h = dv.getUint16(2, true);
   const fps_x100 = dv.getUint16(4, true);
   const frames = dv.getUint32(6, true);
+  if (!w || !h || !frames) throw new Error("Invalid BA header values");
   return { w, h, fps: fps_x100 / 100.0, frames, headerSize: 10 };
 }
 
 function renderFrame(bitset, w, h) {
-  const img = ctx.createImageData(w, h);
-  const data = img.data;
+  if (!state.img || state.img.width !== w || state.img.height !== h) {
+    state.img = ctx.createImageData(w, h);
+  }
+  const data = state.img.data;
   let p = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -54,7 +78,7 @@ function renderFrame(bitset, w, h) {
       data[p++] = v; data[p++] = v; data[p++] = v; data[p++] = 255;
     }
   }
-  ctx.putImageData(img, 0, 0);
+  ctx.putImageData(state.img, 0, 0);
 }
 
 async function extractXObjectBytes(pdf, name) {
@@ -90,7 +114,8 @@ function startPlayback() {
   state.off = state.headerSize;
 
   // frame0
-  state.cur = state.blob.slice(state.off, state.off + state.packedLen);
+  state.cur = new Uint8Array(state.packedLen);
+  state.cur.set(state.blob.subarray(state.off, state.off + state.packedLen));
   state.off += state.packedLen;
 
   // 오디오를 “마스터 클럭”으로 사용 (동기화 안정)
@@ -103,7 +128,7 @@ function startPlayback() {
 
     while (state.frameIndex < target && state.frameIndex + 1 < state.frames) {
       state.frameIndex++;
-      const diff = state.blob.slice(state.off, state.off + state.packedLen);
+      const diff = state.blob.subarray(state.off, state.off + state.packedLen);
       state.off += state.packedLen;
       xorInPlace(state.cur, diff);
     }
@@ -122,7 +147,13 @@ async function loadPdfFile(file) {
   audioEl.pause();
   audioEl.removeAttribute("src");
   audioEl.load();
+  if (state.audioUrl) {
+    URL.revokeObjectURL(state.audioUrl);
+    state.audioUrl = null;
+  }
 
+  state.loaded = false;
+  await ensurePdfJs();
   const ab = await file.arrayBuffer();
   const bytes = new Uint8Array(ab);
 
@@ -140,6 +171,10 @@ async function loadPdfFile(file) {
   state.headerSize = hdr.headerSize;
   state.packedLen = Math.ceil((state.w * state.h) / 8);
   state.blob = ba;
+  const expected = state.headerSize + (state.packedLen * state.frames);
+  if (state.blob.length < expected) {
+    throw new Error(`BA stream truncated: expected ${expected} bytes, got ${state.blob.length}`);
+  }
 
   // canvas 설정
   cv.width = state.w;
@@ -152,8 +187,8 @@ async function loadPdfFile(file) {
 
   // 오디오 포맷은 우리가 encoder에서 정할 것(추천: audio/ogg; codecs=opus)
   const audioBlob = new Blob([au], { type: "audio/ogg" });
-  const url = URL.createObjectURL(audioBlob);
-  audioEl.src = url;
+  state.audioUrl = URL.createObjectURL(audioBlob);
+  audioEl.src = state.audioUrl;
 
   state.loaded = true;
   btnPlay.disabled = false;

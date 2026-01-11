@@ -6,9 +6,6 @@
 # Cargo
 Cargo.lock
 
-# Output files
-/out/
-*.pdf
 
 # OS
 .DS_Store
@@ -21,8 +18,8 @@ Thumbs.db
 *.swo
 *~
 
-# Video files (optional - uncomment if you don't want to track video files)
-# *.mp4
-# *.avi
-# *.mov
+\
 
+# Added by cargo
+
+/target
