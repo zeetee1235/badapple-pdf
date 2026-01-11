@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Bad Apple from PDF</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; }
+    .drop { border: 2px dashed #999; border-radius: 12px; padding: 24px; text-align:center; }
+    canvas { image-rendering: pixelated; border: 1px solid #aaa; margin-top: 16px; display:block; }
+    .row { display:flex; gap:12px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+  <h2>Bad Apple (frames + audio are inside your PDF)</h2>
+
+  <div id="drop" class="drop">
+    <p><b>Drop your PDF here</b> (the one you downloaded)</p>
+    <p>or</p>
+    <input type="file" id="file" accept="application/pdf" />
+  </div>
+
+  <div class="row">
+    <button id="btnPlay" disabled>Play</button>
+    <button id="btnPause" disabled>Pause</button>
+    <span id="info"></span>
+  </div>
+
+  <audio id="audio" controls style="width: min(720px, 100%); margin-top: 12px;"></audio>
+  <canvas id="cv"></canvas>
+
+  <!-- PDF.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
