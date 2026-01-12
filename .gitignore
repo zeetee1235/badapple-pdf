@@ -1,5 +1,6 @@
 # Rust
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
 
@@ -18,8 +19,4 @@ Thumbs.db
 *.swo
 *~
 
-\
-
 # Added by cargo
-
-/target

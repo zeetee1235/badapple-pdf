@@ -1,3 +1,5 @@
+import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
+
 const drop = document.getElementById("drop");
 const fileInput = document.getElementById("file");
 const info = document.getElementById("info");
@@ -7,22 +9,8 @@ const audioEl = document.getElementById("audio");
 const cv = document.getElementById("cv");
 const ctx = cv.getContext("2d");
 
-const PDFJS_CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js";
-const PDFJS_WORKER_CDN = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
-
-async function ensurePdfJs() {
-  if (window.pdfjsLib) return;
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = PDFJS_CDN;
-    s.onload = resolve;
-    s.onerror = () => reject(new Error("Failed to load PDF.js from CDN"));
-    document.head.appendChild(s);
-  });
-  if (!window.pdfjsLib) throw new Error("pdfjsLib is not defined");
-  if (pdfjsLib.GlobalWorkerOptions) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_CDN;
-  }
+if (pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.min.mjs";
 }
 
 let state = {
@@ -153,7 +141,6 @@ async function loadPdfFile(file) {
   }
 
   state.loaded = false;
-  await ensurePdfJs();
   const ab = await file.arrayBuffer();
   const bytes = new Uint8Array(ab);
 
