@@ -72,11 +72,22 @@ function renderFrame(bitset, w, h) {
 async function extractXObjectBytes(pdf, name) {
   const page = await pdf.getPage(1);
 
-  // 내부 접근(버전 의존). MVP 용.
-  const transport = pdf._transport;
-  const xref = transport.xref;
+  // 내부 접근(버전 의존). 최대한 안전하게 탐색.
+  const transport = pdf._transport || (pdf._pdfInfo && pdf._pdfInfo.transport);
+  const xref = transport && transport.xref;
+  if (!xref) throw new Error("Cannot access PDF.js xref (internals changed).");
 
-  const pageDict = page._pageDictionary || (page._pageInfo && page._pageInfo.pageDict);
+  const pageDict =
+    page._pageDictionary ||
+    page._pageDict ||
+    (page._pageInfo && (page._pageInfo.pageDict || page._pageInfo.pageDictionary || page._pageInfo.dict)) ||
+    (() => {
+      for (const k of Object.keys(page)) {
+        const v = page[k];
+        if (v && typeof v.get === "function" && typeof v.getRaw === "function") return v;
+      }
+      return null;
+    })();
   if (!pageDict) throw new Error("Cannot access page dictionary (PDF.js internals changed).");
 
   const res = await pageDict.get("Resources");
