@@ -69,39 +69,6 @@ function renderFrame(bitset, w, h) {
   ctx.putImageData(state.img, 0, 0);
 }
 
-async function extractXObjectBytes(pdf, name) {
-  const page = await pdf.getPage(1);
-
-  // 내부 접근(버전 의존). 최대한 안전하게 탐색.
-  const transport = pdf._transport || (pdf._pdfInfo && pdf._pdfInfo.transport);
-  const xref = transport && transport.xref;
-  if (!xref) throw new Error("Cannot access PDF.js xref (internals changed).");
-
-  const pageDict =
-    page._pageDictionary ||
-    page._pageDict ||
-    (page._pageInfo && (page._pageInfo.pageDict || page._pageInfo.pageDictionary || page._pageInfo.dict)) ||
-    (() => {
-      for (const k of Object.keys(page)) {
-        const v = page[k];
-        if (v && typeof v.get === "function" && typeof v.getRaw === "function") return v;
-      }
-      return null;
-    })();
-  if (!pageDict) throw new Error("Cannot access page dictionary (PDF.js internals changed).");
-
-  const res = await pageDict.get("Resources");
-  const xobj = await res.get("XObject");
-  const ref = await xobj.get(name); // "BA" or "AU"
-
-  const stream = await xref.fetch(ref);
-
-  // getBytes()는 보통 Filter가 적용된 “디코딩된 바이트”를 줌
-  // (우리는 PDF에 FlateDecode로 넣을 예정)
-  const bytes = stream.getBytes();
-  return new Uint8Array(bytes);
-}
-
 function stopPlayback() {
   if (state.raf) cancelAnimationFrame(state.raf);
   state.raf = 0;
@@ -158,8 +125,16 @@ async function loadPdfFile(file) {
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   const pdf = await loadingTask.promise;
 
-  // 1) BA 추출
-  const ba = await extractXObjectBytes(pdf, "BA");
+  // 1) Attachments 추출 (안정적 API)
+  const atts = await pdf.getAttachments();
+  if (!atts) throw new Error("No attachments found in this PDF.");
+
+  const baAtt = atts["BA.bin"];
+  const auAtt = atts["AU.ogg"];
+  if (!baAtt) throw new Error("Missing attachment: BA.bin");
+  if (!auAtt) throw new Error("Missing attachment: AU.ogg");
+
+  const ba = new Uint8Array(baAtt.content);
   const hdr = parseHeader(ba);
 
   state.w = hdr.w;
@@ -181,7 +156,7 @@ async function loadPdfFile(file) {
   cv.style.height = (state.h * 6) + "px";
 
   // 2) AU 추출 (오디오)
-  const au = await extractXObjectBytes(pdf, "AU");
+  const au = new Uint8Array(auAtt.content);
 
   // 오디오 포맷은 우리가 encoder에서 정할 것(추천: audio/ogg; codecs=opus)
   const audioBlob = new Blob([au], { type: "audio/ogg" });

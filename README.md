@@ -11,18 +11,18 @@ PDF 하나로 Bad Apple 영상을 재생하는 데모.
 - `run_test.sh`: 인코더 빌드 + PDF 생성 + 간단 검증
 
 ## PDF 내부 규약 (고정)
-Page 1 -> Resources -> XObject
-- `BA`: Bad Apple 영상 프레임 (FlateDecode로 압축)
-- `AU`: 오디오 OGG (FlateDecode로 압축, `Mime=audio/ogg`)
+첨부파일(EmbeddedFiles)로 BA/AU를 넣는다.
+- `BA.bin`: Bad Apple 영상 프레임 (raw)
+- `AU.ogg`: 오디오 OGG (raw)
 
-### BA 포맷
+### BA 포맷 (BA.bin)
 - 헤더(LE): `u16 width`, `u16 height`, `u16 fps_x100`, `u32 frame_count`
 - frame0: raw bitset (MSB-first)
 - frame1..: 이전 프레임과 XOR한 diff bitset
-- 전체 blob을 zlib(FlateDecode) 압축
+- 전체 blob은 raw 그대로 저장
 
-### AU 포맷
-- OGG(Opus 권장) 바이트 전체를 zlib(FlateDecode) 압축
+### AU 포맷 (AU.ogg)
+- OGG(Opus 권장) 바이트를 raw 그대로 저장
 
 ## 인코더 사용법
 예시:
@@ -38,7 +38,7 @@ cargo run --release --manifest-path encoder/Cargo.toml -- \
 ## 웹 플레이어
 - 파일: `docs/play.html`, `docs/app.js`
 - PDF.js 로컬 번들: `docs/vendor/pdfjs/pdf.min.mjs`, `docs/vendor/pdfjs/pdf.worker.min.mjs`
-- 동작: 사용자가 PDF를 드롭/선택 -> `BA`/`AU` 스트림 추출 -> 캔버스 + 오디오 재생
+- 동작: 사용자가 PDF를 드롭/선택 -> 첨부파일 `BA.bin`/`AU.ogg` 추출 -> 캔버스 + 오디오 재생
 
 ## 테스트
 ```bash

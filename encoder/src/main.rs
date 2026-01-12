@@ -1,19 +1,12 @@
 use anyhow::{bail, Context, Result};
-use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Dictionary, Document, Object, Stream};
 use std::{
     env,
     fs,
-    io::{Read, Write},
+    io::Read,
     path::PathBuf,
     process::{Command, Stdio},
 };
-
-fn zlib_compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = ZlibEncoder::new(Vec::new(), Compression::best());
-    enc.write_all(data)?;
-    Ok(enc.finish()?)
-}
 
 // MSB-first bit packing (player.js getBit()와 동일 규약)
 fn pack_bits(bits01: &[u8]) -> Vec<u8> {
@@ -143,13 +136,33 @@ fn encode_video_blob_via_ffmpeg(
 /// PDF 생성:
 /// - 1페이지 컨텐츠에 START 버튼처럼 보이게 그려놓고
 /// - 같은 영역에 Link annotation (/URI)을 올린다.
-/// - Resources.XObject.BA / AU에 스트림을 달아둔다.
-fn make_pdf(
-    out_pdf: &PathBuf,
-    start_url: &str,
-    ba_zlib: &[u8], // BA: zlib(FlateDecode)로 압축된 blob
-    au_zlib: &[u8], // AU: zlib(FlateDecode)로 압축된 ogg bytes
-) -> Result<()> {
+/// - EmbeddedFiles에 BA.bin / AU.ogg를 첨부한다.
+fn add_attachment(doc: &mut Document, name: &str, data: &[u8], mime: &str) -> lopdf::ObjectId {
+    let ef_id = doc.new_object_id();
+    let ef_stream = Stream::new(
+        dictionary! {
+            "Type" => "EmbeddedFile",
+            "Subtype" => mime,
+            "Length" => data.len() as i64,
+        },
+        data.to_vec(),
+    );
+    doc.objects.insert(ef_id, Object::Stream(ef_stream));
+
+    let filespec_id = doc.new_object_id();
+    let filespec = dictionary! {
+        "Type" => "Filespec",
+        "F" => Object::String(name.as_bytes().to_vec(), lopdf::StringFormat::Literal),
+        "UF" => Object::String(name.as_bytes().to_vec(), lopdf::StringFormat::Literal),
+        "EF" => dictionary! {
+            "F" => Object::Reference(ef_id),
+        },
+    };
+    doc.objects.insert(filespec_id, Object::Dictionary(filespec));
+    filespec_id
+}
+
+fn make_pdf(out_pdf: &PathBuf, start_url: &str, ba_raw: &[u8], au_raw: &[u8]) -> Result<()> {
     let mut doc = Document::with_version("1.7");
 
     // Object IDs
@@ -168,49 +181,28 @@ fn make_pdf(
         }),
     );
 
-    // BA stream object (XObject Form로 넣기)
-    let ba_id = doc.new_object_id();
-    let ba_stream = Stream::new(
-        dictionary! {
-            "Type" => "XObject",
-            "Subtype" => "Form",
-            "FormType" => 1,
-            "BBox" => vec![0.into(), 0.into(), 1.into(), 1.into()],
-            "Resources" => Dictionary::new(),
-            "Filter" => "FlateDecode",
-            "Length" => ba_zlib.len() as i64,
-            "BAType" => "BadAppleFrames"
-        },
-        ba_zlib.to_vec(),
-    );
-    doc.objects.insert(ba_id, Object::Stream(ba_stream));
+    // Attachments (EmbeddedFiles)
+    let ba_filespec_id = add_attachment(&mut doc, "BA.bin", ba_raw, "application/octet-stream");
+    let au_filespec_id = add_attachment(&mut doc, "AU.ogg", au_raw, "audio/ogg");
 
-    // AU stream object (오디오 OGG를 FlateDecode로 압축해서 넣기)
-    let au_id = doc.new_object_id();
-    let au_stream = Stream::new(
-        dictionary! {
-            "Type" => "XObject",
-            "Subtype" => "Form",
-            "FormType" => 1,
-            "BBox" => vec![0.into(), 0.into(), 1.into(), 1.into()],
-            "Resources" => Dictionary::new(),
-            "Filter" => "FlateDecode",
-            "Length" => au_zlib.len() as i64,
-            "AUType" => "BadAppleAudio",
-            "Mime" => "audio/ogg"
-        },
-        au_zlib.to_vec(),
+    let names_id = doc.new_object_id();
+    let embedded_files = dictionary! {
+        "Names" => vec![
+            Object::String("AU.ogg".as_bytes().to_vec(), lopdf::StringFormat::Literal),
+            Object::Reference(au_filespec_id),
+            Object::String("BA.bin".as_bytes().to_vec(), lopdf::StringFormat::Literal),
+            Object::Reference(ba_filespec_id),
+        ]
+    };
+    doc.objects.insert(
+        names_id,
+        Object::Dictionary(dictionary! { "EmbeddedFiles" => embedded_files }),
     );
-    doc.objects.insert(au_id, Object::Stream(au_stream));
 
-    // Page Resources: Font + XObject {BA, AU}
+    // Page Resources: Font only
     let resources = dictionary! {
         "Font" => dictionary! {
             "F1" => Object::Reference(font_id),
-        },
-        "XObject" => dictionary! {
-            "BA" => Object::Reference(ba_id),
-            "AU" => Object::Reference(au_id),
         }
     };
 
@@ -296,7 +288,9 @@ fn make_pdf(
         catalog_id,
         Object::Dictionary(dictionary! {
             "Type" => "Catalog",
-            "Pages" => Object::Reference(pages_id)
+            "Pages" => Object::Reference(pages_id),
+            "Names" => Object::Reference(names_id),
+            "AF" => vec![Object::Reference(ba_filespec_id), Object::Reference(au_filespec_id)],
         }),
     );
     doc.trailer.set("Root", Object::Reference(catalog_id));
@@ -331,26 +325,20 @@ fn parse_args() -> Result<(PathBuf, PathBuf, PathBuf, u16, u16, f32, u8, Option<
 fn main() -> Result<()> {
     let (video, audio, out_pdf, w, h, fps, threshold, max_frames, start_url) = parse_args()?;
 
-    // 1) BA blob 생성 (uncompressed)
+    // 1) BA blob 생성 (raw, uncompressed)
     let ba_blob = encode_video_blob_via_ffmpeg(&video, w, h, fps, threshold, max_frames)
         .context("failed to encode video frames")?;
     eprintln!("BA blob (raw) bytes: {}", ba_blob.len());
 
-    // 2) BA blob zlib compress (PDF FlateDecode)
-    let ba_z = zlib_compress(&ba_blob)?;
-    eprintln!("BA blob (zlib) bytes: {}", ba_z.len());
-
-    // 3) AU bytes 읽고 zlib compress
+    // 2) AU bytes 읽기 (raw)
     let au_raw = fs::read(&audio).context("failed to read audio file")?;
     eprintln!("AU raw bytes: {}", au_raw.len());
-    let au_z = zlib_compress(&au_raw)?;
-    eprintln!("AU zlib bytes: {}", au_z.len());
 
-    // 4) PDF 생성
+    // 3) PDF 생성 (attachments)
     if let Some(parent) = out_pdf.parent() {
         fs::create_dir_all(parent).ok();
     }
-    make_pdf(&out_pdf, &start_url, &ba_z, &au_z)?;
+    make_pdf(&out_pdf, &start_url, &ba_blob, &au_raw)?;
     eprintln!("Wrote PDF: {}", out_pdf.display());
 
     Ok(())
